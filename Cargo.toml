@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Timmy Silesmo"]
 description = "Neon Postgres WASI HTTP driver"
+license = "Apache-2.0"
 
 [dependencies]
 wstd = "0.5.3"
