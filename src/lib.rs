@@ -17,6 +17,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// Returns and error if NEON_CONNECTION_STRING isn't set.
+    pub fn new_from_env() -> Result<Self> {
+        let connection_string = std::env::var("NEON_CONNECTION_STRING")
+            .context("ENV \"NEON_CONNECTION_STRING\" isn't set")?;
+
+        Self::new(&connection_string)
+    }
+
     pub fn new(connection_string: &str) -> Result<Self> {
         let host = connection_string
             .split('@')
