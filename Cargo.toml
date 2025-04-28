@@ -1,6 +1,6 @@
 [package]
 name = "neon-wasi-http"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Timmy Silesmo"]
 description = "Neon Postgres WASI HTTP driver"
@@ -13,4 +13,4 @@ keywords = ["neon", "database", "postgres", "postgresql"]
 wstd = "0.5.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-anyhow = "1.0.97"
+anyhow = "1.0.98"
