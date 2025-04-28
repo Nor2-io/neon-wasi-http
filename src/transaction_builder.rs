@@ -9,19 +9,23 @@ pub struct Transaction {
 }
 
 //TODO: Add support for Transaction Options https://github.com/neondatabase/serverless/blob/e4d6b4bde81d56ea7597d7c43c97c3695647fc0e/export/httpQuery.ts#L233
+#[derive(Default)]
 pub struct TransactionBuilder {
     queries: Vec<Query>,
 }
 
 impl TransactionBuilder {
     pub fn new() -> Self {
-        Self {
-            queries: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn add(mut self, query: Query) -> Self {
         self.queries.push(query);
+        self
+    }
+
+    pub fn merge(mut self, mut transaction: Transaction) -> Self {
+        self.queries.append(&mut transaction.queries);
         self
     }
 
