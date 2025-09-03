@@ -1,7 +1,10 @@
 use crate::Client;
 use anyhow::Result;
+#[cfg(not(target_os = "wasi"))]
+use reqwest::StatusCode;
+#[cfg(target_os = "wasi")]
 use wstd::{
-    http::{IntoBody, Method, Request},
+    http::{IntoBody, Method, Request, StatusCode},
     io::AsyncRead,
 };
 
@@ -11,41 +14,74 @@ where
     R: serde::de::DeserializeOwned,
 {
     let body = serde_json::to_string(&body)?;
-    post_raw(connection, url, body.as_bytes()).await
+    post_raw(connection, url, body).await
 }
 
-pub async fn post_raw<R>(connection: &Client, url: &str, body: &[u8]) -> Result<R>
+pub async fn post_raw<R>(connection: &Client, url: &str, body: String) -> Result<R>
 where
     R: serde::de::DeserializeOwned,
 {
-    let request = Request::builder()
-        .uri(url)
-        .method(Method::POST)
-        .header("Content-Type", "application/json")
-        .header("User-Agent", "neon-http-serverless/0.1.0")
-        .header(
-            "Neon-Connection-String",
-            connection.connection_string.clone(),
-        )
-        .header("Neon-Raw-Text-Output", "true")
-        //TODO: Create a serde deserializer for `QueryResult` to allow Neon-Array-Mode which results in less data being sent over the wire.
-        .header("Neon-Array-Mode", "false")
-        .header("Content-Length", body.len().to_string())
-        .body(body.into_body())?;
+    #[cfg(target_os = "wasi")]
+    {
+        let request = Request::builder()
+            .uri(url)
+            .method(Method::POST)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "neon-http-serverless/0.1.0")
+            .header(
+                "Neon-Connection-String",
+                connection.connection_string.clone(),
+            )
+            .header("Neon-Raw-Text-Output", "true")
+            //TODO: Create a serde deserializer for `QueryResult` to allow Neon-Array-Mode which results in less data being sent over the wire.
+            .header("Neon-Array-Mode", "false")
+            .header("Content-Length", body.len().to_string())
+            .body(body.into_body())?;
 
-    let res = connection.client.send(request).await?;
-    let (parts, mut body) = res.into_parts();
+        let response = connection.client.send(request).await?;
 
-    let mut utf8_body = Vec::new();
+        let (parts, mut body) = response.into_parts();
 
-    body.read_to_end(&mut utf8_body).await?;
+        let mut utf8_body = Vec::new();
 
-    if parts.status != 200 {
-        match std::str::from_utf8(&utf8_body) {
-            Ok(utf8_body) => anyhow::bail!("Error: {utf8_body}"),
-            Err(_) => anyhow::bail!("Error: Unable to convert body to utf8 string"),
+        body.read_to_end(&mut utf8_body).await?;
+
+        if parts.status != StatusCode::OK {
+            match std::str::from_utf8(&utf8_body) {
+                Ok(utf8_body) => anyhow::bail!("Error: {utf8_body}"),
+                Err(_) => anyhow::bail!("Error: Unable to convert body to utf8 string"),
+            }
         }
-    }
 
-    Ok(serde_json::from_slice(&utf8_body)?)
+        Ok(serde_json::from_slice(&utf8_body)?)
+    };
+    #[cfg(not(target_os = "wasi"))]
+    {
+        let url: reqwest::Url = url.parse()?;
+        let response = connection
+            .client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "neon-http-serverless/0.1.0")
+            .header(
+                "Neon-Connection-String",
+                connection.connection_string.clone(),
+            )
+            .header("Neon-Raw-Text-Output", "true")
+            //TODO: Create a serde deserializer for `QueryResult` to allow Neon-Array-Mode which results in less data being sent over the wire.
+            .header("Neon-Array-Mode", "false")
+            .header("Content-Length", body.len().to_string())
+            .body(body)
+            .send()
+            .await?;
+
+        if response.status() != StatusCode::OK {
+            match response.text().await {
+                Ok(body) => anyhow::bail!("Error: {body}"),
+                Err(_) => anyhow::bail!("Error: Unable to get error text from body"),
+            }
+        }
+
+        Ok(response.json().await?)
+    }
 }

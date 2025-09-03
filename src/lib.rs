@@ -13,7 +13,10 @@ pub use transaction_builder::{Transaction, TransactionBuilder};
 pub struct Client {
     pub(crate) host: String,
     pub(crate) connection_string: String,
+    #[cfg(target_os = "wasi")]
     pub client: wstd::http::Client,
+    #[cfg(not(target_os = "wasi"))]
+    pub client: reqwest::Client,
 }
 
 impl Client {
@@ -38,7 +41,7 @@ impl Client {
         Ok(Self {
             host: host.to_owned(),
             connection_string: connection_string.to_owned(),
-            client: wstd::http::Client::new(),
+            client: Default::default(),
         })
     }
 
@@ -69,19 +72,25 @@ impl Client {
     }
 }
 
-#[wstd::test]
-pub async fn test() -> Result<()> {
-    let client = Client::new("<SOME_CONNECTION_STRING>")?;
+#[cfg(test)]
+mod test {
+    use super::*;
+    use anyhow::Result;
 
-    QueryBuilder::new("SELECT * FROM playing_with_neon")
-        .execute_raw(&client)
-        .await?;
+    #[wstd::test]
+    pub async fn test() -> Result<()> {
+        let client = Client::new("<SOME_CONNECTION_STRING>")?;
 
-    TransactionBuilder::new()
-        .add(QueryBuilder::new("SELECT * FROM playing_with_neon").build())
-        .add(QueryBuilder::new("SELECT * FROM playing_with_neon").build())
-        .execute_raw(&client)
-        .await?;
+        QueryBuilder::new("SELECT * FROM playing_with_neon")
+            .execute_raw(&client)
+            .await?;
 
-    Ok(())
+        TransactionBuilder::new()
+            .add(QueryBuilder::new("SELECT * FROM playing_with_neon").build())
+            .add(QueryBuilder::new("SELECT * FROM playing_with_neon").build())
+            .execute_raw(&client)
+            .await?;
+
+        Ok(())
+    }
 }
