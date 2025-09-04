@@ -1,6 +1,6 @@
 [package]
 name = "neon-wasi-http"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 authors = ["Timmy Silesmo"]
 description = "Neon Postgres WASI HTTP driver"

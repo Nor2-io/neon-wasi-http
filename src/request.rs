@@ -54,7 +54,7 @@ where
         }
 
         Ok(serde_json::from_slice(&utf8_body)?)
-    };
+    }
     #[cfg(not(target_os = "wasi"))]
     {
         let url: reqwest::Url = url.parse()?;
