@@ -1,4 +1,4 @@
-use crate::{Client, TransactionResponse};
+use crate::{Client, QueryResponse, TransactionResponse};
 use anyhow::Result;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -58,26 +58,17 @@ impl OrmBuilder {
             ));
         }
 
-        let mut results = Vec::new();
+        //let mut results = Vec::new();
         match client
-            .execute_orm_raw(serde_json::json!({ "query": format!("{} {where_clause}",T::select_as_json_sql()), "params": params }))
+            .execute_orm_raw_query(serde_json::json!({ "query": format!("{} {where_clause}",T::select_as_json_sql()), "params": params }))
             .await? {
-            TransactionResponse::Ok(transaction_result) => {
-                if let Some(first_result) = transaction_result.results.first() {
-                    for row in &first_result.rows {
-                        if let Some(json_value) = row.get("jsonb_build_object") {
-                            match serde_json::from_value(json_value.clone()) {
-                                Ok(entity) => results.push(entity),
-                                Err(e) => return Err(e.into()),
-                            }
-                        }
-                    }
-                }
+            QueryResponse::Ok(mut query_result) => {
+                Ok(query_result.deserialize_multiple_orm()?)
             }
-            TransactionResponse::Err(neon_error) => return Err(neon_error.into()),
+            QueryResponse::Err(neon_error) => Err(neon_error.into()),
         }
 
-        Ok(results)
+        //Ok(results)
     }
 
     pub async fn execute(self, connection: &Client) -> Result<()> {
@@ -90,8 +81,7 @@ impl OrmBuilder {
 
     pub fn build(self) -> serde_json::Value {
         serde_json::json!({
-            "statements": self.statements.iter().map(|(sql, params)| {
-                // For each (sql, params) tuple, create an OBJECT with the keys "query" and "params"
+            "queries": self.statements.iter().map(|(sql, params)| {
                 serde_json::json!({ "query": sql, "params": params })
             }).collect::<Vec<_>>() // Collect the generated objects into a Vec
         })

@@ -106,8 +106,33 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
     }
 
     // --- Insert Logic ---
+    let simple_insert_logic = quote! {
+        let mut columns = vec![];
+        let mut params = vec![];
+        let mut placeholders = vec![];
+        #(
+            let val = serde_json::to_value(&self.#simple_field_idents).unwrap();
+            if !val.is_null() {
+                columns.push(stringify!(#simple_field_idents).to_string());
+                placeholders.push(format!("${}", params.len() + 1));
+                if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &val {
+                    let json_string = serde_json::to_string(&val).unwrap();
+                    params.push(serde_json::Value::String(json_string));
+                } else {
+                    params.push(val);
+                }
+            }
+        )*
+        let query = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            Self::table_name(), columns.join(", "), placeholders.join(", ")
+        );
+        (query, params)
+    };
+
     let insert_impl = if !related_fields.is_empty() {
-        let child_inserts_gen = related_fields.iter().map(|(rel_ident, child_type)| {
+        let relational_insert_logic = {
+            let child_inserts_gen = related_fields.iter().map(|(rel_ident, child_type)| {
             quote! {
                 if !self.#rel_ident.is_empty() {
                     let child_table_name = #child_type::table_name();
@@ -134,7 +159,17 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                         let item_obj = item_val.as_object().unwrap();
                         for field_name in &child_field_names {
                             placeholders.push(format!("${}", combined_params.len() + 1));
-                            combined_params.push(item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone());
+
+                            let child_val = item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone();
+
+                            // --- APPLY THE SAME FIX HERE for child parameters ---
+                            if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &child_val {
+                                let json_string = serde_json::to_string(&child_val).unwrap();
+                                combined_params.push(serde_json::Value::String(json_string));
+                            } else {
+                                combined_params.push(child_val);
+                            }
+                            //combined_params.push(item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone());
                         }
                         child_value_clauses.push(format!("((SELECT id FROM inserted_parent), {})", placeholders.join(", ")));
                     }
@@ -147,52 +182,57 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
             }
         });
 
+            quote! {
+                {
+                    use #trait_path;
+                    let mut parent_cols = vec![];
+                    let mut parent_params = vec![];
+                    let mut parent_placeholders = vec![];
+                    #(
+                        let val = serde_json::to_value(&self.#simple_field_idents).unwrap();
+                        if !val.is_null() {
+                            parent_cols.push(stringify!(#simple_field_idents).to_string());
+                            parent_placeholders.push(format!("${}", parent_params.len() + 1));
+                            if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &val {
+                                let json_string = serde_json::to_string(&val).unwrap();
+                                parent_params.push(serde_json::Value::String(json_string));
+                            } else {
+                                parent_params.push(val);
+                            }
+                        }
+                    )*;
+                    let parent_insert_sql = format!(
+                        "WITH inserted_parent AS (INSERT INTO {} ({}) VALUES ({}) RETURNING {})",
+                        Self::table_name(), parent_cols.join(", "), parent_placeholders.join(", "), Self::pk_column_name()
+                    );
+                    let mut combined_params = parent_params;
+                    let mut all_sql = vec![parent_insert_sql];
+
+                    #(#child_inserts_gen)*;
+
+                    (all_sql.join(" "), combined_params)
+                }
+            }
+        };
+
+        // Now, we create the runtime check for the "empty children" bug.
+        let empty_check_fragments = related_fields.iter().map(|(ident, _)| {
+            quote! { self.#ident.is_empty() }
+        });
+
+        // The final generated code for a struct with relations is an `if/else` block
+        // that gets executed when `to_sql_insert_transaction` is called.
         quote! {
-            {
-
-                use #trait_path;
-                let mut parent_cols = vec![];
-                let mut parent_params = vec![];
-                let mut parent_placeholders = vec![];
-                #(
-                    let val = serde_json::to_value(&self.#simple_field_idents).unwrap();
-                    if !val.is_null() {
-                        parent_cols.push(stringify!(#simple_field_idents).to_string());
-                        parent_placeholders.push(format!("${}", parent_params.len() + 1));
-                        parent_params.push(val);
-                    }
-                )*;
-                let parent_insert_sql = format!(
-                    "WITH inserted_parent AS (INSERT INTO {} ({}) VALUES ({}) RETURNING {})",
-                    Self::table_name(), parent_cols.join(", "), parent_placeholders.join(", "), Self::pk_column_name()
-                );
-                let mut combined_params = parent_params;
-                let mut all_sql = vec![parent_insert_sql];
-
-                #(#child_inserts_gen)*;
-
-                (all_sql.join(" "), combined_params)
+            if #(#empty_check_fragments)&&* {
+                // If ALL related child vectors are empty, use the simple logic.
+                #simple_insert_logic
+            } else {
+                // Otherwise, use the full relational logic.
+                #relational_insert_logic
             }
         }
     } else {
-        quote! {
-            let mut columns = vec![];
-            let mut params = vec![];
-            let mut placeholders = vec![];
-            #(
-                let val = serde_json::to_value(&self.#simple_field_idents).unwrap();
-                if !val.is_null() {
-                    columns.push(stringify!(#simple_field_idents).to_string());
-                    placeholders.push(format!("${}", params.len() + 1));
-                    params.push(val);
-                }
-            )*
-            let query = format!(
-                "INSERT INTO {} ({}) VALUES ({})",
-                Self::table_name(), columns.join(", "), placeholders.join(", ")
-            );
-            (query, params)
-        }
+        simple_insert_logic
     };
 
     // --- Update Logic ---
@@ -251,7 +291,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                 {
                     let child_table = #child_type::table_name();
                     joins.push(format!(
-                        "LEFT JOIN (SELECT {} AS fk, json_agg(to_jsonb(child)) AS items FROM {} AS child GROUP BY fk) AS {} ON a.{} = {}.fk",
+                        "LEFT JOIN (SELECT {} AS fk, jsonb_agg(to_jsonb(child)) AS items FROM {} AS child GROUP BY fk) AS {} ON a.{} = {}.fk",
                         #foreign_key_col,
                         child_table,
                         #ident_str,

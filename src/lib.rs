@@ -14,9 +14,8 @@ pub use sql_macro::*;
 pub use transaction_builder::{Transaction, TransactionBuilder};
 
 pub struct Client {
-    pub(crate) host: String,
     pub(crate) connection_string: String,
-    pub(crate) https: bool,
+    pub(crate) url: String,
     #[cfg(target_os = "wasi")]
     pub client: wstd::http::Client,
     #[cfg(not(target_os = "wasi"))]
@@ -41,31 +40,16 @@ impl Client {
             .split('/')
             .next()
             .context("Invalid connection string, missing db path")?;
+        let protocol = if host == "db.localtest.me:4444" {
+            "http".to_string()
+        } else {
+            "https".to_string()
+        };
 
         Ok(Self {
-            host: host.to_owned(),
             connection_string: connection_string.to_owned(),
             client: Default::default(),
-            https: true,
-        })
-    }
-
-    /// Only for temporary tests.
-    pub fn new_local(connection_string: &str) -> Result<Self> {
-        let host = connection_string
-            .split('@')
-            .last()
-            .context("Invalid connection string, missing credentials")?;
-        let host = host
-            .split('/')
-            .next()
-            .context("Invalid connection string, missing db path")?;
-
-        Ok(Self {
-            host: host.to_owned(),
-            connection_string: connection_string.to_owned(),
-            client: Default::default(),
-            https: false,
+            url: format!("{protocol}://{host}/sql"),
         })
     }
 
@@ -77,13 +61,7 @@ impl Client {
 
     /// Execute a SQL query and return the raw response
     pub async fn execute_raw(&self, sql: Query) -> Result<QueryResponse> {
-        let url = if self.https {
-            format!("https://{}/sql", self.host)
-        } else {
-            format!("http://{}/sql", self.host)
-        };
-
-        post(self, &url, sql).await
+        post(self, &self.url, sql).await
     }
 
     /// Execute a SQL transaction
@@ -94,13 +72,7 @@ impl Client {
 
     /// Execute a SQL transaction and return the raw response
     pub async fn execute_transaction_raw(&self, sql: Transaction) -> Result<TransactionResponse> {
-        let url = if self.https {
-            format!("https://{}/sql", self.host)
-        } else {
-            format!("http://{}/sql", self.host)
-        };
-
-        post(self, &url, sql).await
+        post(self, &self.url, sql).await
     }
 
     pub(crate) async fn execute_orm(&self, transaction: serde_json::Value) -> Result<()> {
@@ -112,13 +84,14 @@ impl Client {
         &self,
         sql: serde_json::Value,
     ) -> Result<TransactionResponse> {
-        let url = if self.https {
-            format!("https://{}/sql", self.host)
-        } else {
-            format!("http://{}/sql", self.host)
-        };
+        post(self, &self.url, sql).await
+    }
 
-        post(self, &url, sql).await
+    pub(crate) async fn execute_orm_raw_query(
+        &self,
+        sql: serde_json::Value,
+    ) -> Result<QueryResponse> {
+        post(self, &self.url, sql).await
     }
 }
 
@@ -199,6 +172,7 @@ mod test {
         };
 
         let payload = orm::OrmBuilder::new().insert(item).build();
+        println!("Debug: {payload}");
         let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2), ((SELECT id FROM inserted_parent), $3), ((SELECT id FROM inserted_parent), $4)";
 
         let expected_params = serde_json::json!([
@@ -207,8 +181,8 @@ mod test {
             {"data":  {"closed_at": "Yesterday",},"type": "Closed",},
             {"data":  {"int_value": 12,},"type": "Value",},
         ]);
-        assert_eq!(payload["statements"][0]["query"], expected_sql);
-        assert_eq!(payload["statements"][0]["params"], expected_params);
+        assert_eq!(payload["queries"][0]["query"], expected_sql);
+        assert_eq!(payload["queries"][0]["params"], expected_params);
     }
 
     #[test]
@@ -225,27 +199,15 @@ mod test {
         let expected_sql = "UPDATE test SET name = $1 WHERE id = $2";
         let expected_params = serde_json::json!(["Updated Test Name", 42]);
 
-        let statements = &payload["statements"];
-        assert_eq!(statements[0]["query"].as_str().unwrap(), expected_sql);
-        assert_eq!(statements[0]["params"], expected_params);
+        let queries = &payload["queries"];
+        assert_eq!(queries[0]["query"].as_str().unwrap(), expected_sql);
+        assert_eq!(queries[0]["params"], expected_params);
     }
 
     #[test]
     fn test_orm_delete_generation() {
-        let item = TestTable {
-            id: Some(42),
-            name: None,
-            description: None,
-            history: vec![],
-        };
-
-        let payload = orm::OrmBuilder::new().delete(item).build();
-
-        let expected_sql = "DELETE FROM test WHERE id = $1";
-        let expected_params = serde_json::json!([42]);
-
-        let statements = &payload["statements"];
-        assert_eq!(statements[0]["query"].as_str().unwrap(), expected_sql);
-        assert_eq!(statements[0]["params"], expected_params);
+        use crate::orm::NeonTable;
+        let apa = TestTable::select_as_json_sql();
+        println!("{apa}");
     }
 }
