@@ -50,6 +50,25 @@ impl Client {
         })
     }
 
+    /// Only for temporary tests.
+    pub fn new_local(connection_string: &str) -> Result<Self> {
+        let host = connection_string
+            .split('@')
+            .last()
+            .context("Invalid connection string, missing credentials")?;
+        let host = host
+            .split('/')
+            .next()
+            .context("Invalid connection string, missing db path")?;
+
+        Ok(Self {
+            host: host.to_owned(),
+            connection_string: connection_string.to_owned(),
+            client: Default::default(),
+            https: false,
+        })
+    }
+
     /// Execute a SQL query
     pub async fn execute(&self, query: Query) -> Result<()> {
         self.execute_raw(query).await?;
