@@ -11,7 +11,6 @@ license = "Apache-2.0"
 repository = "https://github.com/Nor2-io/neon-wasi-http"
 keywords = ["neon", "database", "postgres", "postgresql"]
 
-
 [dependencies]
 sql_macro = { path = "sql_macro" }
 serde = { version = "1.0.219", features = ["derive"] }

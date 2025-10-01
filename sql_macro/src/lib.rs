@@ -12,6 +12,8 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
     // --- Struct-level attribute parsing ---
     let mut table_name = None;
     let mut pk_name = None;
+    let mut crate_path_override = None;
+
     for attr in &input.attrs {
         if attr.path.is_ident("neon_table") {
             if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
@@ -25,17 +27,29 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                             if let syn::Lit::Str(lit_str) = nv.lit {
                                 pk_name = Some(lit_str.value());
                             }
+                        } else if nv.path.is_ident("crate_path") {
+                            if let syn::Lit::Str(lit_str) = nv.lit {
+                                // Store the override path, e.g., "crate"
+                                crate_path_override = Some(lit_str.value());
+                            }
                         }
                     }
                 }
             }
         }
     }
+
     let table_name = table_name.expect("`table_name` attribute is required");
     let pk_name_str = pk_name.expect("`pk` attribute is required");
     let pk_ident = format_ident!("{}", pk_name_str);
 
-    // --- Field parsing ---
+    let trait_path = if let Some(path_str) = crate_path_override {
+        let path: syn::Path = syn::parse_str(&path_str).expect("Failed to parse crate_path");
+        quote! { #path::orm::NeonTable }
+    } else {
+        quote! { ::neon_wasi_http::orm::NeonTable }
+    };
+
     let fields = if let Data::Struct(data) = &input.data {
         &data.fields
     } else {
@@ -135,7 +149,8 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
 
         quote! {
             {
-                use crate::orm::NeonTable;
+
+                use #trait_path;
                 let mut parent_cols = vec![];
                 let mut parent_params = vec![];
                 let mut parent_placeholders = vec![];
@@ -250,9 +265,8 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
 
         quote! {
             {
-                use crate::orm::NeonTable;
+                use #trait_path;
 
-                // --- FIX: Explicitly type the vectors to solve E0282 ---
                 let mut selectors: Vec<String> = Vec::new();
                 let mut joins: Vec<String> = Vec::new();
 
@@ -261,7 +275,6 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                 #(#simple_field_fragments)*
                 #(#related_field_fragments)*
 
-                // --- MODIFICATION: No WHERE clause is generated ---
                 format!(
                     "SELECT jsonb_build_object({}) FROM {} a {}",
                     selectors.join(", "),
@@ -274,7 +287,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
 
     // --- Final `impl` block ---
     let expanded = quote! {
-        impl crate::orm::NeonTable for #struct_name {
+        impl #trait_path for #struct_name {
             fn table_name() -> &'static str { #table_name }
             fn pk_column_name() -> &'static str { #pk_name_str }
 

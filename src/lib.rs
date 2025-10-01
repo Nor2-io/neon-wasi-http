@@ -1,6 +1,6 @@
 mod deserializer;
 mod neon_response;
-mod orm;
+pub mod orm;
 mod query_builder;
 mod request;
 mod transaction_builder;
@@ -10,7 +10,6 @@ pub use neon_response::{QueryResponse, QueryResult, TransactionResponse, Transac
 pub use query_builder::{Query, QueryBuilder};
 use request::post;
 
-pub use orm::{NeonTable, OrmBuilder};
 pub use sql_macro::*;
 pub use transaction_builder::{Transaction, TransactionBuilder};
 
@@ -111,7 +110,7 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
-    #[neon_table(table_name = "test", pk = "id")]
+    #[neon_table(table_name = "test", pk = "id", crate_path = "crate")]
     pub struct TestTable {
         pub id: Option<u64>,
         pub name: Option<String>,
@@ -121,7 +120,7 @@ mod test {
     }
 
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
-    #[neon_table(table_name = "test_history", pk = "id")]
+    #[neon_table(table_name = "test_history", pk = "id", crate_path = "crate")]
     pub struct TestHistory {
         pub id: Option<u64>,
         pub test_id: Option<u64>,
@@ -180,7 +179,7 @@ mod test {
             ],
         };
 
-        let payload = OrmBuilder::new().insert(item).build();
+        let payload = orm::OrmBuilder::new().insert(item).build();
         let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2), ((SELECT id FROM inserted_parent), $3), ((SELECT id FROM inserted_parent), $4)";
 
         let expected_params = serde_json::json!([
@@ -202,7 +201,7 @@ mod test {
             history: vec![],
         };
 
-        let payload = OrmBuilder::new().update(item).build();
+        let payload = orm::OrmBuilder::new().update(item).build();
 
         let expected_sql = "UPDATE test SET name = $1 WHERE id = $2";
         let expected_params = serde_json::json!(["Updated Test Name", 42]);
@@ -221,7 +220,7 @@ mod test {
             history: vec![],
         };
 
-        let payload = OrmBuilder::new().delete(item).build();
+        let payload = orm::OrmBuilder::new().delete(item).build();
 
         let expected_sql = "DELETE FROM test WHERE id = $1";
         let expected_params = serde_json::json!([42]);

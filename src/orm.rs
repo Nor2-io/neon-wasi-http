@@ -29,25 +29,25 @@ impl OrmBuilder {
         Self::default()
     }
 
-    pub fn insert<T: NeonTable>(mut self, item: T) -> Self {
+    pub fn insert<T: crate::orm::NeonTable>(mut self, item: T) -> Self {
         let (sql, params) = item.to_sql_insert_transaction();
         self.statements.push((sql, params));
         self
     }
 
-    pub fn update<T: NeonTable>(mut self, item: T) -> Self {
+    pub fn update<T: crate::orm::NeonTable>(mut self, item: T) -> Self {
         let (sql, params) = item.to_sql_update();
         self.statements.push((sql, params));
         self
     }
 
-    pub fn delete<T: NeonTable>(mut self, item: T) -> Self {
+    pub fn delete<T: crate::orm::NeonTable>(mut self, item: T) -> Self {
         let (sql, params) = item.to_sql_delete();
         self.statements.push((sql, params));
         self
     }
 
-    pub async fn select<T: NeonTable + DeserializeOwned>(
+    pub async fn select<T: crate::orm::NeonTable + DeserializeOwned>(
         client: &Client,
         where_clause: &str,
         params: Vec<serde_json::Value>,
