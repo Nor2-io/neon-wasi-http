@@ -131,57 +131,64 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
     };
 
     let insert_impl = if !related_fields.is_empty() {
+        // This is the logic for the complex relational insert.
         let relational_insert_logic = {
+            // We will generate a separate `if` block for each child relationship.
             let child_inserts_gen = related_fields.iter().map(|(rel_ident, child_type)| {
+            let rel_ident_str = rel_ident.to_string();
             quote! {
+                // This `if` block is generated for each child Vec (e.g., `history`, `media`).
+                // It runs at execution time.
                 if !self.#rel_ident.is_empty() {
                     let child_table_name = #child_type::table_name();
                     let child_pk_name = #child_type::pk_column_name();
-                    let foreign_key_col = format!("{}_id", #table_name.trim_end_matches('s'));
+                    let foreign_key_col = format!("{}_id", Self::table_name().trim_end_matches('s'));
                     let mut child_cols = vec![foreign_key_col.clone()];
                     let mut child_field_names: Vec<String> = Vec::new();
-                    if let Some(first_child) = self.#rel_ident.get(0) {
-                        let val = serde_json::to_value(first_child).unwrap();
-                        if let Some(obj) = val.as_object() {
-                            for key in obj.keys() {
-                                if key != child_pk_name && key != &foreign_key_col {
-                                    child_field_names.push(key.clone());
-                                }
+
+                    // Introspect the first child to get column names.
+                    let first_child_val = serde_json::to_value(&self.#rel_ident[0]).unwrap();
+                    if let Some(obj) = first_child_val.as_object() {
+                        for key in obj.keys() {
+                            if key != child_pk_name && key != &foreign_key_col {
+                                child_field_names.push(key.clone());
                             }
-                            child_field_names.sort();
-                            child_cols.extend(child_field_names.iter().cloned());
                         }
+                        child_field_names.sort();
+                        child_cols.extend(child_field_names.iter().cloned());
                     }
+
+                    // Build the VALUES clauses for this child type.
                     let mut child_value_clauses = vec![];
                     for item in &self.#rel_ident {
-                        let mut placeholders = vec![];
                         let item_val = serde_json::to_value(item).unwrap();
                         let item_obj = item_val.as_object().unwrap();
+                        let mut placeholders = vec![];
                         for field_name in &child_field_names {
                             placeholders.push(format!("${}", combined_params.len() + 1));
-
                             let child_val = item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone();
-
-                            // --- APPLY THE SAME FIX HERE for child parameters ---
                             if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &child_val {
                                 let json_string = serde_json::to_string(&child_val).unwrap();
                                 combined_params.push(serde_json::Value::String(json_string));
                             } else {
                                 combined_params.push(child_val);
                             }
-                            //combined_params.push(item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone());
                         }
                         child_value_clauses.push(format!("((SELECT id FROM inserted_parent), {})", placeholders.join(", ")));
                     }
-                    let child_sql = format!(
+
+                    let child_insert = format!(
                         "INSERT INTO {} ({}) VALUES {}",
                         child_table_name, child_cols.join(", "), child_value_clauses.join(", ")
                     );
-                    all_sql.push(child_sql);
+
+                    // Always add this child insert as another CTE.
+                    with_clauses.push(format!(", inserted_{} AS ({} RETURNING 1)", #rel_ident_str, child_insert));
                 }
             }
         });
 
+            // This is the main body of the generated `to_sql_insert_transaction` function.
             quote! {
                 {
                     use #trait_path;
@@ -201,33 +208,34 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                             }
                         }
                     )*;
-                    let parent_insert_sql = format!(
-                        "WITH inserted_parent AS (INSERT INTO {} ({}) VALUES ({}) RETURNING {})",
-                        Self::table_name(), parent_cols.join(", "), parent_placeholders.join(", "), Self::pk_column_name()
-                    );
+
                     let mut combined_params = parent_params;
-                    let mut all_sql = vec![parent_insert_sql];
+                    let mut with_clauses = vec![
+                        format!(
+                            "WITH inserted_parent AS (INSERT INTO {} ({}) VALUES ({}) RETURNING id)",
+                            Self::table_name(), parent_cols.join(", "), parent_placeholders.join(", ")
+                        )
+                    ];
 
-                    #(#child_inserts_gen)*;
+                    // Splice in the generated `if` blocks for each child relationship.
+                    #(#child_inserts_gen)*
 
-                    (all_sql.join(" "), combined_params)
+                    // Assemble the final query by joining all CTEs and adding a final SELECT.
+                    let final_query = format!("{} SELECT id FROM inserted_parent", with_clauses.join(" "));
+
+                    (final_query, combined_params)
                 }
             }
         };
 
-        // Now, we create the runtime check for the "empty children" bug.
         let empty_check_fragments = related_fields.iter().map(|(ident, _)| {
             quote! { self.#ident.is_empty() }
         });
 
-        // The final generated code for a struct with relations is an `if/else` block
-        // that gets executed when `to_sql_insert_transaction` is called.
         quote! {
             if #(#empty_check_fragments)&&* {
-                // If ALL related child vectors are empty, use the simple logic.
                 #simple_insert_logic
             } else {
-                // Otherwise, use the full relational logic.
                 #relational_insert_logic
             }
         }
