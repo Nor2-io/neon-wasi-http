@@ -251,7 +251,12 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
             let val = serde_json::to_value(&self.#simple_field_idents).unwrap();
             if !val.is_null() {
                 set_clauses.push(format!("{} = ${}", stringify!(#simple_field_idents), params.len() + 1));
-                params.push(val);
+                if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &val {
+                    let json_string = serde_json::to_string(&val).unwrap();
+                    params.push(serde_json::Value::String(json_string));
+                } else {
+                    params.push(val);
+                }
             }
         )*
         let pk_val = self.pk_value();
