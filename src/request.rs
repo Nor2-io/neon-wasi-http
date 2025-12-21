@@ -49,7 +49,7 @@ where
             }
         }
 
-        Ok(serde_json::from_slice(&utf8_body)?)
+        Ok(body.json().await?)
     }
     #[cfg(not(target_os = "wasi"))]
     {
