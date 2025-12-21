@@ -4,7 +4,7 @@ use anyhow::Result;
 use reqwest::StatusCode;
 #[cfg(target_os = "wasi")]
 use wstd::{
-    http::{IntoBody, Method, Request, StatusCode},
+    http::{Method, Request, StatusCode},
     io::AsyncRead,
 };
 
@@ -36,18 +36,14 @@ where
             //TODO: Create a serde deserializer for `QueryResult` to allow Neon-Array-Mode which results in less data being sent over the wire.
             .header("Neon-Array-Mode", "false")
             .header("Content-Length", body.len().to_string())
-            .body(body.into_body())?;
+            .body(body)?;
 
         let response = connection.client.send(request).await?;
 
         let (parts, mut body) = response.into_parts();
 
-        let mut utf8_body = Vec::new();
-
-        body.read_to_end(&mut utf8_body).await?;
-
         if parts.status != StatusCode::OK {
-            match std::str::from_utf8(&utf8_body) {
+            match body.str_contents().await {
                 Ok(utf8_body) => anyhow::bail!("Error: {utf8_body}"),
                 Err(_) => anyhow::bail!("Error: Unable to convert body to utf8 string"),
             }
