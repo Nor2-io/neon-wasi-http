@@ -109,11 +109,21 @@ mod test {
         pub description: Option<String>,
         #[neon_table(is_related)]
         pub history: Vec<TestHistory>,
+        #[neon_table(is_related)]
+        pub data: Option<TestData>,
     }
 
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
     #[neon_table(table_name = "test_history", pk = "id", crate_path = "crate")]
     pub struct TestHistory {
+        pub id: Option<u64>,
+        pub test_id: Option<u64>,
+        pub state: TestHistoryState,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
+    #[neon_table(table_name = "test_data", pk = "id", crate_path = "crate", on_conflict="state")]
+    pub struct TestData {
         pub id: Option<u64>,
         pub test_id: Option<u64>,
         pub state: TestHistoryState,
@@ -169,17 +179,23 @@ mod test {
                     state: TestHistoryState::Value { int_value: 12 },
                 },
             ],
+            data: Some(TestData {
+                id: None,
+                test_id: None,
+                state: TestHistoryState::Active,
+            })
         };
 
         let payload = orm::OrmBuilder::new().insert(item).build();
         println!("Debug: {payload}");
-        let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2), ((SELECT id FROM inserted_parent), $3), ((SELECT id FROM inserted_parent), $4)";
+        let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) , inserted_history AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2), ((SELECT id FROM inserted_parent), $3), ((SELECT id FROM inserted_parent), $4)   RETURNING 1) , inserted_data AS (INSERT INTO test_data (test_id, state) VALUES ((SELECT id FROM inserted_parent), $5)  ON CONFLICT (state) DO NOTHING  RETURNING 1) SELECT id FROM inserted_parent";
 
         let expected_params = serde_json::json!([
             "Test Name",
-            {"type": "Active",},
-            {"data":  {"closed_at": "Yesterday",},"type": "Closed",},
-            {"data":  {"int_value": 12,},"type": "Value",},
+            "{\"type\":\"Active\"}",
+            "{\"data\":{\"closed_at\":\"Yesterday\"},\"type\":\"Closed\"}",
+            "{\"data\":{\"int_value\":12},\"type\":\"Value\"}",
+            "{\"type\":\"Active\"}",
         ]);
         assert_eq!(payload["queries"][0]["query"], expected_sql);
         assert_eq!(payload["queries"][0]["params"], expected_params);
@@ -192,6 +208,7 @@ mod test {
             name: Some("Updated Test Name".to_string()),
             description: None,
             history: vec![],
+            data: None,
         };
 
         let payload = orm::OrmBuilder::new().update(item).build();

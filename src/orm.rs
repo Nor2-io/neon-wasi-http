@@ -17,6 +17,8 @@ pub trait NeonTable: Serialize + Sized {
     fn to_sql_delete(&self) -> (String, Vec<Value>);
 
     fn select_as_json_sql() -> String;
+
+    fn on_conflict_sql() -> &'static str { "" }
 }
 
 #[derive(Default, Serialize)]

@@ -13,6 +13,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
     let mut table_name = None;
     let mut pk_name = None;
     let mut crate_path_override = None;
+    let mut on_conflict_clause = String::new();
 
     for attr in &input.attrs {
         if attr.path.is_ident("neon_table") {
@@ -31,6 +32,16 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                             if let syn::Lit::Str(lit_str) = nv.lit {
                                 // Store the override path, e.g., "crate"
                                 crate_path_override = Some(lit_str.value());
+                            }
+                        } else if nv.path.is_ident("on_conflict") {
+                            if let syn::Lit::Str(lit_str) = nv.lit {
+                                let val = lit_str.value();
+                                if val.to_lowercase().contains("do nothing") {
+                                    on_conflict_clause = " ON CONFLICT DO NOTHING".to_string();
+                                } else {
+                                    // Assume the user provided just the column name
+                                    on_conflict_clause = format!(" ON CONFLICT ({}) DO NOTHING", val);
+                                }
                             }
                         }
                     }
@@ -83,10 +94,20 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
             }
         }
         if is_related {
+            let mut is_vec = false;
+            let mut is_option = false;
             let mut child_type = None;
             if let Type::Path(type_path) = &field.ty {
                 if let Some(segment) = type_path.path.segments.last() {
                     if segment.ident == "Vec" {
+                        is_vec = true;
+                        if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                            if let Some(GenericArgument::Type(ty)) = args.args.first() {
+                                child_type = Some(ty.clone());
+                            }
+                        }
+                    } else if segment.ident == "Option" {
+                        is_option = true;
                         if let PathArguments::AngleBracketed(args) = &segment.arguments {
                             if let Some(GenericArgument::Type(ty)) = args.args.first() {
                                 child_type = Some(ty.clone());
@@ -96,9 +117,9 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                 }
             }
             if let Some(ty) = child_type {
-                related_fields.push((field_ident.clone(), ty));
+                related_fields.push((field_ident.clone(), ty, is_vec));
             } else {
-                panic!("`is_related` attribute can only be used on a Vec<T> field");
+                panic!("`is_related` attribute can only be used on a Vec<T> or Option<T> fields");
             }
         } else {
             simple_field_idents.push(field_ident.clone());
@@ -133,62 +154,82 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
     let insert_impl = if !related_fields.is_empty() {
         // This is the logic for the complex relational insert.
         let relational_insert_logic = {
-            // We will generate a separate `if` block for each child relationship.
-            let child_inserts_gen = related_fields.iter().map(|(rel_ident, child_type)| {
-            let rel_ident_str = rel_ident.to_string();
-            quote! {
-                // This `if` block is generated for each child Vec (e.g., `history`, `media`).
-                // It runs at execution time.
-                if !self.#rel_ident.is_empty() {
-                    let child_table_name = #child_type::table_name();
-                    let child_pk_name = #child_type::pk_column_name();
-                    let foreign_key_col = format!("{}_id", Self::table_name().trim_end_matches('s'));
-                    let mut child_cols = vec![foreign_key_col.clone()];
-                    let mut child_field_names: Vec<String> = Vec::new();
+            let child_inserts_gen = related_fields.iter().map(|(rel_ident, child_type, is_vec)| {
+                let rel_ident_str = rel_ident.to_string();
 
-                    // Introspect the first child to get column names.
-                    let first_child_val = serde_json::to_value(&self.#rel_ident[0]).unwrap();
-                    if let Some(obj) = first_child_val.as_object() {
-                        for key in obj.keys() {
-                            if key != child_pk_name && key != &foreign_key_col {
-                                child_field_names.push(key.clone());
+                let (check_has_data, get_sample, get_iter) = if *is_vec {
+                    (
+                        quote! { !self.#rel_ident.is_empty() },
+                        quote! { self.#rel_ident.get(0).unwrap() },
+                        quote! { self.#rel_ident.iter() }
+                    )
+                } else {
+                    (
+                        quote! { self.#rel_ident.is_some() },
+                        quote! { self.#rel_ident.as_ref().unwrap() },
+                        quote! { self.#rel_ident.as_ref().into_iter() }
+                    )
+                };
+
+                quote! {
+
+                    if #check_has_data {
+                        let child_table_name = #child_type::table_name();
+                        let child_pk_name = #child_type::pk_column_name();
+                        let foreign_key_col = format!("{}_id", Self::table_name().trim_end_matches('s'));
+
+                        let mut child_cols = vec![foreign_key_col.clone()];
+                        let mut child_field_names: Vec<String> = Vec::new();
+
+                        let sample_item = #get_sample;
+                        let item_val = serde_json::to_value(sample_item).unwrap();
+                        if let Some(obj) = item_val.as_object() {
+                            for key in obj.keys() {
+                                if key != child_pk_name && key != &foreign_key_col {
+                                    child_field_names.push(key.clone());
+                                }
                             }
+                            child_field_names.sort();
+                            child_cols.extend(child_field_names.iter().cloned());
                         }
-                        child_field_names.sort();
-                        child_cols.extend(child_field_names.iter().cloned());
-                    }
 
-                    // Build the VALUES clauses for this child type.
-                    let mut child_value_clauses = vec![];
-                    for item in &self.#rel_ident {
-                        let item_val = serde_json::to_value(item).unwrap();
-                        let item_obj = item_val.as_object().unwrap();
-                        let mut placeholders = vec![];
-                        for field_name in &child_field_names {
-                            placeholders.push(format!("${}", combined_params.len() + 1));
-                            let child_val = item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone();
-                            if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &child_val {
-                                let json_string = serde_json::to_string(&child_val).unwrap();
-                                combined_params.push(serde_json::Value::String(json_string));
-                            } else {
-                                combined_params.push(child_val);
+                        let mut child_value_clauses = vec![];
+
+                        for item in #get_iter {
+                            let item_obj_val = serde_json::to_value(item).unwrap();
+                            let item_obj = item_obj_val.as_object().unwrap();
+                            let mut placeholders = vec![];
+
+                            for field_name in &child_field_names {
+                                placeholders.push(format!("${}", combined_params.len() + 1));
+                                let val = item_obj.get(field_name).unwrap_or(&serde_json::Value::Null).clone();
+
+                                if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &val {
+                                    combined_params.push(serde_json::Value::String(serde_json::to_string(&val).unwrap()));
+                                } else {
+                                    combined_params.push(val);
+                                }
                             }
+                            child_value_clauses.push(format!("((SELECT id FROM inserted_parent), {})", placeholders.join(", ")));
                         }
-                        child_value_clauses.push(format!("((SELECT id FROM inserted_parent), {})", placeholders.join(", ")));
+
+                        // Check if the child type has an ON CONFLICT logic (e.g., for media_item)
+                        // We assume child_type implements a method `on_conflict_sql()` via the trait
+                        let conflict_clause = #child_type::on_conflict_sql();
+
+                        let child_insert = format!(
+                            "INSERT INTO {} ({}) VALUES {} {} ",
+                            child_table_name,
+                            child_cols.join(", "),
+                            child_value_clauses.join(", "),
+                            conflict_clause
+                        );
+
+                        with_clauses.push(format!(", inserted_{} AS ({} RETURNING 1)", #rel_ident_str, child_insert));
                     }
-
-                    let child_insert = format!(
-                        "INSERT INTO {} ({}) VALUES {}",
-                        child_table_name, child_cols.join(", "), child_value_clauses.join(", ")
-                    );
-
-                    // Always add this child insert as another CTE.
-                    with_clauses.push(format!(", inserted_{} AS ({} RETURNING 1)", #rel_ident_str, child_insert));
                 }
-            }
-        });
+            });
 
-            // This is the main body of the generated `to_sql_insert_transaction` function.
             quote! {
                 {
                     use #trait_path;
@@ -201,8 +242,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                             parent_cols.push(stringify!(#simple_field_idents).to_string());
                             parent_placeholders.push(format!("${}", parent_params.len() + 1));
                             if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &val {
-                                let json_string = serde_json::to_string(&val).unwrap();
-                                parent_params.push(serde_json::Value::String(json_string));
+                                parent_params.push(serde_json::Value::String(serde_json::to_string(&val).unwrap()));
                             } else {
                                 parent_params.push(val);
                             }
@@ -217,19 +257,16 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                         )
                     ];
 
-                    // Splice in the generated `if` blocks for each child relationship.
                     #(#child_inserts_gen)*
 
-                    // Assemble the final query by joining all CTEs and adding a final SELECT.
                     let final_query = format!("{} SELECT id FROM inserted_parent", with_clauses.join(" "));
-
                     (final_query, combined_params)
                 }
             }
         };
 
-        let empty_check_fragments = related_fields.iter().map(|(ident, _)| {
-            quote! { self.#ident.is_empty() }
+        let empty_check_fragments = related_fields.iter().map(|(ident, _, is_vec)| {
+            if *is_vec { quote! { self.#ident.is_empty() } } else { quote! { self.#ident.is_none() } }
         });
 
         quote! {
@@ -267,7 +304,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
             "UPDATE {} SET {} WHERE {} = ${}",
             Self::table_name(),
             set_clauses.join(", "),
-            Self::pk_column_name(),
+            #pk_name_str,
             params.len() + 1
         );
         params.push(pk_val);
@@ -283,7 +320,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
         let query = format!(
             "DELETE FROM {} WHERE {} = $1",
             Self::table_name(),
-            Self::pk_column_name()
+            #pk_name_str
         );
         (query, vec![pk_val])
     };
@@ -297,23 +334,30 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
             }
         });
 
-        let related_field_fragments = related_fields.iter().map(|(ident, child_type)| {
+        let related_field_fragments = related_fields.iter().map(|(ident, child_type, is_vec)| {
             let ident_str = ident.to_string();
             let foreign_key_col = format!("{}_id", table_name.trim_end_matches('s'));
-            quote! {
-                {
-                    let child_table = #child_type::table_name();
-                    joins.push(format!(
-                        "LEFT JOIN (SELECT {} AS fk, jsonb_agg(to_jsonb(child)) AS items FROM {} AS child GROUP BY fk) AS {} ON a.{} = {}.fk",
-                        #foreign_key_col,
-                        child_table,
-                        #ident_str,
-                        Self::pk_column_name(),
-                        #ident_str
-                    ));
-                    selectors.push(format!("'{}', COALESCE({}, '[]'::jsonb)", #ident_str, format!("{}.items", #ident_str)));
+
+            if *is_vec {
+                    quote! {
+                        let child_table = #child_type::table_name();
+                        joins.push(format!(
+                            "LEFT JOIN (SELECT {} AS fk, jsonb_agg(to_jsonb(c)) AS items FROM {} c GROUP BY fk) AS {} ON a.{} = {}.fk",
+                            #foreign_key_col, child_table, #ident_str, #pk_name_str, #ident_str
+                        ));
+                        selectors.push(format!("'{}', COALESCE({}.items, '[]'::jsonb)", #ident_str, #ident_str));
+                    }
+                } else {
+                    // One-to-One Selection
+                    quote! {
+                        let child_table = #child_type::table_name();
+                        joins.push(format!(
+                            "LEFT JOIN (SELECT {} AS fk, to_jsonb(c) AS item FROM {} c) AS {} ON a.{} = {}.fk",
+                            #foreign_key_col, child_table, #ident_str, #pk_name_str, #ident_str
+                        ));
+                        selectors.push(format!("'{}', {}.item", #ident_str, #ident_str));
+                    }
                 }
-            }
         });
 
         quote! {
@@ -323,7 +367,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                 let mut selectors: Vec<String> = Vec::new();
                 let mut joins: Vec<String> = Vec::new();
 
-                selectors.push(format!("'{}', a.{}", Self::pk_column_name(), Self::pk_column_name()));
+                selectors.push(format!("'{}', a.{}", #pk_name_str, #pk_name_str));
 
                 #(#simple_field_fragments)*
                 #(#related_field_fragments)*
@@ -343,6 +387,7 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
         impl #trait_path for #struct_name {
             fn table_name() -> &'static str { #table_name }
             fn pk_column_name() -> &'static str { #pk_name_str }
+            fn on_conflict_sql() -> &'static str { #on_conflict_clause }
 
             fn pk_value(&self) -> serde_json::Value {
                 serde_json::to_value(&self.#pk_ident).expect("PK field must be serializable")
@@ -363,6 +408,8 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
             fn select_as_json_sql() -> String {
                 #select_as_json_impl
             }
+
+
         }
     };
 
