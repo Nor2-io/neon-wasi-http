@@ -40,7 +40,8 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                                     on_conflict_clause = " ON CONFLICT DO NOTHING".to_string();
                                 } else {
                                     // Assume the user provided just the column name
-                                    on_conflict_clause = format!(" ON CONFLICT ({}) DO NOTHING", val);
+                                    on_conflict_clause =
+                                        format!(" ON CONFLICT ({}) DO NOTHING", val);
                                 }
                             }
                         }
@@ -95,7 +96,6 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
         }
         if is_related {
             let mut is_vec = false;
-            let mut is_option = false;
             let mut child_type = None;
             if let Type::Path(type_path) = &field.ty {
                 if let Some(segment) = type_path.path.segments.last() {
@@ -107,7 +107,6 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
                             }
                         }
                     } else if segment.ident == "Option" {
-                        is_option = true;
                         if let PathArguments::AngleBracketed(args) = &segment.arguments {
                             if let Some(GenericArgument::Type(ty)) = args.args.first() {
                                 child_type = Some(ty.clone());
@@ -266,7 +265,11 @@ pub fn neon_table_derive(input: TokenStream) -> TokenStream {
         };
 
         let empty_check_fragments = related_fields.iter().map(|(ident, _, is_vec)| {
-            if *is_vec { quote! { self.#ident.is_empty() } } else { quote! { self.#ident.is_none() } }
+            if *is_vec {
+                quote! { self.#ident.is_empty() }
+            } else {
+                quote! { self.#ident.is_none() }
+            }
         });
 
         quote! {
