@@ -18,7 +18,18 @@ pub trait NeonTable: Serialize + Sized {
 
     fn select_as_json_sql() -> String;
 
-    fn on_conflict_sql() -> &'static str { "" }
+    fn on_conflict_sql() -> &'static str {
+        ""
+    }
+
+    fn simple_column_names() -> Vec<&'static str>;
+
+    fn to_sql_parts(
+        &self,
+        parent_cte_name: &str,
+        parent_table_name: &str,
+        param_offset: usize,
+    ) -> (Vec<String>, Vec<serde_json::Value>);
 }
 
 #[derive(Default, Serialize)]

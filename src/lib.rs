@@ -122,7 +122,12 @@ mod test {
     }
 
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
-    #[neon_table(table_name = "test_data", pk = "id", crate_path = "crate", on_conflict="state")]
+    #[neon_table(
+        table_name = "test_data",
+        pk = "id",
+        crate_path = "crate",
+        on_conflict = "state"
+    )]
     pub struct TestData {
         pub id: Option<u64>,
         pub test_id: Option<u64>,
@@ -183,12 +188,15 @@ mod test {
                 id: None,
                 test_id: None,
                 state: TestHistoryState::Active,
-            })
+            }),
         };
 
         let payload = orm::OrmBuilder::new().insert(item).build();
-        println!("Debug: {payload}");
-        let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) , inserted_history AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2), ((SELECT id FROM inserted_parent), $3), ((SELECT id FROM inserted_parent), $4)   RETURNING 1) , inserted_data AS (INSERT INTO test_data (test_id, state) VALUES ((SELECT id FROM inserted_parent), $5)  ON CONFLICT (state) DO NOTHING  RETURNING 1) SELECT id FROM inserted_parent";
+
+        println!("Payload-Query: => {}", payload["queries"][0]["query"]);
+        println!("Payload-params: => {}", payload["queries"][0]["params"]);
+
+        let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) , child_history_0_0 AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2)  RETURNING id) , child_history_1_0 AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $3)  RETURNING id) , child_history_2_0 AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $4)  RETURNING id) , child_data_0_0 AS (INSERT INTO test_data (test_id, state) VALUES ((SELECT id FROM inserted_parent), $5)  ON CONFLICT (state) DO NOTHING RETURNING id) SELECT id FROM inserted_parent";
 
         let expected_params = serde_json::json!([
             "Test Name",
@@ -197,6 +205,30 @@ mod test {
             "{\"data\":{\"int_value\":12},\"type\":\"Value\"}",
             "{\"type\":\"Active\"}",
         ]);
+
+        assert_eq!(payload["queries"][0]["query"], expected_sql);
+        assert_eq!(payload["queries"][0]["params"], expected_params);
+    }
+
+    #[test]
+    pub fn test_orm_insert_with_empty_child_generation() {
+        let item = TestTable {
+            id: None,
+            name: Some("Test Name".to_string()),
+            description: None,
+            history: Vec::new(),
+            data: None,
+        };
+
+        let payload = orm::OrmBuilder::new().insert(item).build();
+
+        println!("Payload-Query: => {}", payload["queries"][0]["query"]);
+        println!("Payload-params: => {}", payload["queries"][0]["params"]);
+
+        let expected_sql = "INSERT INTO test (name) VALUES ($1)";
+
+        let expected_params = serde_json::json!(["Test Name"]);
+
         assert_eq!(payload["queries"][0]["query"], expected_sql);
         assert_eq!(payload["queries"][0]["params"], expected_params);
     }
