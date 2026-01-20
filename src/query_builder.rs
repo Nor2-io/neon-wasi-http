@@ -35,15 +35,15 @@ impl QueryBuilder {
         connection.execute(self.build()).await
     }
 
-    pub async fn execute_raw(self, connection: &Client) -> Result<QueryResponse> {
-        connection.execute_raw(self.build()).await
+    pub async fn execute_raw(self, connection: &Client, is_select: bool) -> Result<QueryResponse> {
+        connection.execute_raw(self.build(), is_select).await
     }
 
     pub async fn fetch_one<T>(self, conn: &Client) -> Result<Option<T>>
     where
         T: DeserializeOwned,
     {
-        match self.execute_raw(conn).await? {
+        match self.execute_raw(conn, true).await? {
             QueryResponse::Ok(mut query_response) => Ok(query_response.deserialize()?),
             QueryResponse::Err(neon_error) => bail!(neon_error),
         }
@@ -53,7 +53,7 @@ impl QueryBuilder {
     where
         T: DeserializeOwned,
     {
-        match self.execute_raw(conn).await? {
+        match self.execute_raw(conn, true).await? {
             QueryResponse::Ok(mut query_response) => Ok(query_response.deserialize_multiple()?),
             QueryResponse::Err(neon_error) => bail!(neon_error),
         }
