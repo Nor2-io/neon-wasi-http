@@ -63,13 +63,7 @@ impl QueryBuilder {
 impl From<QueryBuilder> for Query {
     fn from(value: QueryBuilder) -> Self {
         Self {
-            query: format!(
-                "WITH SelectQueryRes AS (
-                    {0}
-                )
-                SELECT row_to_json(SelectQueryRes) as jsonb_build_object FROM SelectQueryRes;",
-                value.query
-            ),
+            query: value.query,
             params: value.params,
         }
     }

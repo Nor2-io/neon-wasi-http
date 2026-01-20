@@ -61,7 +61,21 @@ impl Client {
 
     /// Execute a SQL query and return the raw response
     pub async fn execute_raw(&self, sql: Query) -> Result<QueryResponse> {
-        post(self, &self.url, sql).await
+        post(
+            self,
+            &self.url,
+            Query {
+                query: format!(
+                    "WITH SelectQueryRes AS (
+                    {0}
+                )
+                SELECT row_to_json(SelectQueryRes) as jsonb_build_object FROM SelectQueryRes;",
+                    sql.query
+                ),
+                params: sql.params,
+            },
+        )
+        .await
     }
 
     /// Execute a SQL transaction
