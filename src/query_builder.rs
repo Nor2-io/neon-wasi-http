@@ -22,6 +22,11 @@ impl QueryBuilder {
         }
     }
 
+    pub fn set_sql(mut self, sql: &str) -> Self {
+        self.query = sql.to_string();
+        self
+    }
+
     pub fn bind<T: Serialize>(mut self, value: T) -> Self {
         let val = serde_json::to_value(&value).unwrap();
         if !val.is_null() {
