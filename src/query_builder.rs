@@ -6,12 +6,12 @@ use crate::{Client, QueryResponse};
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
     pub query: String,
-    pub params: Vec<String>,
+    pub params: Vec<serde_json::Value>,
 }
 
 pub struct QueryBuilder {
     query: String,
-    params: Vec<String>,
+    params: Vec<serde_json::Value>,
 }
 
 impl QueryBuilder {
@@ -22,8 +22,19 @@ impl QueryBuilder {
         }
     }
 
-    pub fn bind<T: ToString>(mut self, value: T) -> Self {
-        self.params.push(value.to_string());
+    pub fn bind<T: Serialize>(mut self, value: T) -> Self {
+        let val = serde_json::to_value(&value).unwrap();
+        if !val.is_null() {
+            if let serde_json::Value::Object(_) | serde_json::Value::Array(_) = &val {
+                let json_string = serde_json::to_string(&val).unwrap();
+                self.params.push(serde_json::Value::String(json_string));
+            } else {
+                self.params.push(val);
+            }
+        } else {
+            self.params.push(serde_json::Value::Null);
+        }
+
         self
     }
 

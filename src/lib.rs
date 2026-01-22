@@ -65,18 +65,15 @@ impl Client {
             self,
             &self.url,
             if is_select {
-                Query {
-                    query: format!(
-                        "WITH SelectQueryRes AS (
+                serde_json::json!({ "query": format!(
+                    "WITH SelectQueryRes AS (
                         {0}
                     )
                     SELECT row_to_json(SelectQueryRes) as jsonb_build_object FROM SelectQueryRes;",
                         sql.query
-                    ),
-                    params: sql.params,
-                }
+                ), "params": sql.params })
             } else {
-                sql
+                serde_json::json!({ "query": sql.query, "params": sql.params })
             },
         )
         .await
@@ -165,7 +162,7 @@ mod test {
         let client = Client::new("<CONNECT_STRING>")?;
 
         QueryBuilder::new("SELECT * FROM playing_with_neon")
-            .execute_raw(&client)
+            .execute_raw(&client, true)
             .await?;
 
         TransactionBuilder::new()
