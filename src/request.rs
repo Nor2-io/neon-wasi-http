@@ -46,7 +46,7 @@ where
             }
         }
 
-        Ok(body.json().await?)
+        body.json().await
     }
     #[cfg(not(target_os = "wasi"))]
     {

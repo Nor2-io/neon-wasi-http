@@ -31,7 +31,7 @@ impl Client {
     pub fn new(connection_string: &str) -> Result<Self> {
         let host = connection_string
             .split('@')
-            .last()
+            .next_back()
             .context("Invalid connection string, missing credentials")?;
         let host = host
             .split('/')
