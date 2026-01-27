@@ -1,17 +1,21 @@
 mod deserializer;
 mod neon_response;
-pub mod orm;
 mod query_builder;
 mod request;
 mod transaction_builder;
+
+#[cfg(feature = "orm_beta")]
+pub mod orm;
 
 use anyhow::{Context, Result};
 pub use neon_response::{QueryResponse, QueryResult, TransactionResponse, TransactionResult};
 pub use query_builder::{Query, QueryBuilder};
 use request::post;
 
-pub use sql_macro::*;
 pub use transaction_builder::{Transaction, TransactionBuilder};
+
+#[cfg(feature = "orm_beta")]
+pub use sql_macro::*;
 
 pub struct Client {
     pub(crate) connection_string: String,
@@ -90,11 +94,13 @@ impl Client {
         post(self, &self.url, sql).await
     }
 
+    #[cfg(feature = "orm_beta")]
     pub(crate) async fn execute_orm(&self, transaction: serde_json::Value) -> Result<()> {
         self.execute_orm_raw(transaction).await?;
         Ok(())
     }
 
+    #[cfg(feature = "orm_beta")]
     pub(crate) async fn execute_orm_raw(
         &self,
         sql: serde_json::Value,
@@ -102,6 +108,7 @@ impl Client {
         post(self, &self.url, sql).await
     }
 
+    #[cfg(feature = "orm_beta")]
     pub(crate) async fn execute_orm_raw_query(
         &self,
         sql: serde_json::Value,
@@ -116,6 +123,7 @@ mod test {
     use anyhow::Result;
     use serde::{Deserialize, Serialize};
 
+    #[cfg(feature = "orm_beta")]
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
     #[neon_table(table_name = "test", pk = "id", crate_path = "crate")]
     pub struct TestTable {
@@ -128,6 +136,7 @@ mod test {
         pub data: Option<TestData>,
     }
 
+    #[cfg(feature = "orm_beta")]
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
     #[neon_table(table_name = "test_history", pk = "id", crate_path = "crate")]
     pub struct TestHistory {
@@ -136,6 +145,7 @@ mod test {
         pub state: TestHistoryState,
     }
 
+    #[cfg(feature = "orm_beta")]
     #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
     #[neon_table(
         table_name = "test_data",
@@ -174,6 +184,7 @@ mod test {
         Ok(())
     }
 
+    #[cfg(feature = "orm_beta")]
     #[test]
     pub fn test_orm_insert_generation() {
         let item = TestTable {
@@ -225,6 +236,7 @@ mod test {
         assert_eq!(payload["queries"][0]["params"], expected_params);
     }
 
+    #[cfg(feature = "orm_beta")]
     #[test]
     pub fn test_orm_insert_with_empty_child_generation() {
         let item = TestTable {
@@ -248,6 +260,7 @@ mod test {
         assert_eq!(payload["queries"][0]["params"], expected_params);
     }
 
+    #[cfg(feature = "orm_beta")]
     #[test]
     fn test_orm_update_generation() {
         let item = TestTable {
@@ -268,6 +281,7 @@ mod test {
         assert_eq!(queries[0]["params"], expected_params);
     }
 
+    #[cfg(feature = "orm_beta")]
     #[test]
     fn test_orm_delete_generation() {
         use crate::orm::NeonTable;

@@ -659,13 +659,13 @@ dependencies = [
 
 [[package]]
 name = "neon-wasi-http"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "reqwest",
  "serde",
  "serde_json",
- "sql_macro",
+ "sql_macro 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wstd",
 ]
 
@@ -1088,6 +1088,16 @@ dependencies = [
 [[package]]
 name = "sql_macro"
 version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "sql_macro"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bc5698d23c1e0776d20a7d61aa4b08041b58a29f8bb8f291f72ce8142b90ed0"
 dependencies = [
  "quote",
  "syn 1.0.109",

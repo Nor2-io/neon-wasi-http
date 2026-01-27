@@ -3,7 +3,7 @@ members = [".", "sql_macro"]
 
 [package]
 name = "neon-wasi-http"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["Timmy Silesmo"]
 description = "Neon Postgres WASI HTTP driver"
@@ -11,11 +11,15 @@ license = "Apache-2.0"
 repository = "https://github.com/Nor2-io/neon-wasi-http"
 keywords = ["neon", "database", "postgres", "postgresql"]
 
+[features]
+orm_beta = ["dep:sql_macro"]
+
 [dependencies]
-sql_macro = { path = "sql_macro" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+
+sql_macro = { version = "0.1", optional = true }
 
 [target.'cfg(target_os = "wasi")'.dependencies]
 wstd = "0.6"
