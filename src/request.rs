@@ -3,10 +3,7 @@ use anyhow::Result;
 #[cfg(not(target_os = "wasi"))]
 use reqwest::StatusCode;
 #[cfg(target_os = "wasi")]
-use wstd::{
-    http::{Method, Request, StatusCode},
-    io::AsyncRead,
-};
+use wstd::http::{Method, Request, StatusCode};
 
 pub async fn post<B, R>(connection: &Client, url: &str, body: B) -> Result<R>
 where
@@ -49,7 +46,7 @@ where
             }
         }
 
-        Ok(body.json().await?)
+        body.json().await
     }
     #[cfg(not(target_os = "wasi"))]
     {

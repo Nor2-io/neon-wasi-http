@@ -1,5 +1,5 @@
-use anyhow::{bail, Result};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{Client, QueryResponse};
 
