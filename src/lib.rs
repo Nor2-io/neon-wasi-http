@@ -4,15 +4,22 @@ mod query_builder;
 mod request;
 mod transaction_builder;
 
+#[cfg(feature = "orm_beta")]
+pub mod orm;
+
 use anyhow::{Context, Result};
 pub use neon_response::{QueryResponse, QueryResult, TransactionResponse, TransactionResult};
 pub use query_builder::{Query, QueryBuilder};
 use request::post;
+
 pub use transaction_builder::{Transaction, TransactionBuilder};
 
+#[cfg(feature = "orm_beta")]
+pub use sql_macro::*;
+
 pub struct Client {
-    pub(crate) host: String,
     pub(crate) connection_string: String,
+    pub(crate) url: String,
     #[cfg(target_os = "wasi")]
     pub client: wstd::http::Client,
     #[cfg(not(target_os = "wasi"))]
@@ -37,25 +44,43 @@ impl Client {
             .split('/')
             .next()
             .context("Invalid connection string, missing db path")?;
+        let protocol = if host == "db.localtest.me:4444" {
+            "http".to_string()
+        } else {
+            "https".to_string()
+        };
 
         Ok(Self {
-            host: host.to_owned(),
             connection_string: connection_string.to_owned(),
             client: Default::default(),
+            url: format!("{protocol}://{host}/sql"),
         })
     }
 
     /// Execute a SQL query
     pub async fn execute(&self, query: Query) -> Result<()> {
-        self.execute_raw(query).await?;
+        self.execute_raw(query, false).await?;
         Ok(())
     }
 
     /// Execute a SQL query and return the raw response
-    pub async fn execute_raw(&self, sql: Query) -> Result<QueryResponse> {
-        let url = format!("https://{}/sql", self.host);
-
-        post(self, &url, sql).await
+    pub async fn execute_raw(&self, sql: Query, is_select: bool) -> Result<QueryResponse> {
+        post(
+            self,
+            &self.url,
+            if is_select {
+                serde_json::json!({ "query": format!(
+                    "WITH SelectQueryRes AS (
+                        {0}
+                    )
+                    SELECT row_to_json(SelectQueryRes) as jsonb_build_object FROM SelectQueryRes;",
+                        sql.query
+                ), "params": sql.params })
+            } else {
+                serde_json::json!({ "query": sql.query, "params": sql.params })
+            },
+        )
+        .await
     }
 
     /// Execute a SQL transaction
@@ -66,9 +91,29 @@ impl Client {
 
     /// Execute a SQL transaction and return the raw response
     pub async fn execute_transaction_raw(&self, sql: Transaction) -> Result<TransactionResponse> {
-        let url = format!("https://{}/sql", self.host);
+        post(self, &self.url, sql).await
+    }
 
-        post(self, &url, sql).await
+    #[cfg(feature = "orm_beta")]
+    pub(crate) async fn execute_orm(&self, transaction: serde_json::Value) -> Result<()> {
+        self.execute_orm_raw(transaction).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "orm_beta")]
+    pub(crate) async fn execute_orm_raw(
+        &self,
+        sql: serde_json::Value,
+    ) -> Result<TransactionResponse> {
+        post(self, &self.url, sql).await
+    }
+
+    #[cfg(feature = "orm_beta")]
+    pub(crate) async fn execute_orm_raw_query(
+        &self,
+        sql: serde_json::Value,
+    ) -> Result<QueryResponse> {
+        post(self, &self.url, sql).await
     }
 }
 
@@ -76,13 +121,58 @@ impl Client {
 mod test {
     use super::*;
     use anyhow::Result;
+    use serde::{Deserialize, Serialize};
+
+    #[cfg(feature = "orm_beta")]
+    #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
+    #[neon_table(table_name = "test", pk = "id", crate_path = "crate")]
+    pub struct TestTable {
+        pub id: Option<u64>,
+        pub name: Option<String>,
+        pub description: Option<String>,
+        #[neon_table(is_related)]
+        pub history: Vec<TestHistory>,
+        #[neon_table(is_related)]
+        pub data: Option<TestData>,
+    }
+
+    #[cfg(feature = "orm_beta")]
+    #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
+    #[neon_table(table_name = "test_history", pk = "id", crate_path = "crate")]
+    pub struct TestHistory {
+        pub id: Option<u64>,
+        pub test_id: Option<u64>,
+        pub state: TestHistoryState,
+    }
+
+    #[cfg(feature = "orm_beta")]
+    #[derive(Debug, Serialize, Deserialize, NeonTable, Clone)]
+    #[neon_table(
+        table_name = "test_data",
+        pk = "id",
+        crate_path = "crate",
+        on_conflict = "state"
+    )]
+    pub struct TestData {
+        pub id: Option<u64>,
+        pub test_id: Option<u64>,
+        pub state: TestHistoryState,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, Clone)]
+    #[serde(tag = "type", content = "data")]
+    pub enum TestHistoryState {
+        Active,
+        Closed { closed_at: String },
+        Value { int_value: i64 },
+    }
 
     #[wstd::test]
     pub async fn test() -> Result<()> {
-        let client = Client::new("<SOME_CONNECTION_STRING>")?;
+        let client = Client::new("<CONNECT_STRING>")?;
 
         QueryBuilder::new("SELECT * FROM playing_with_neon")
-            .execute_raw(&client)
+            .execute_raw(&client, true)
             .await?;
 
         TransactionBuilder::new()
@@ -92,5 +182,110 @@ mod test {
             .await?;
 
         Ok(())
+    }
+
+    #[cfg(feature = "orm_beta")]
+    #[test]
+    pub fn test_orm_insert_generation() {
+        let item = TestTable {
+            id: None,
+            name: Some("Test Name".to_string()),
+            description: None,
+            history: vec![
+                TestHistory {
+                    id: None,
+                    test_id: None,
+                    state: TestHistoryState::Active,
+                },
+                TestHistory {
+                    id: None,
+                    test_id: None,
+                    state: TestHistoryState::Closed {
+                        closed_at: "Yesterday".to_string(),
+                    },
+                },
+                TestHistory {
+                    id: None,
+                    test_id: None,
+                    state: TestHistoryState::Value { int_value: 12 },
+                },
+            ],
+            data: Some(TestData {
+                id: None,
+                test_id: None,
+                state: TestHistoryState::Active,
+            }),
+        };
+
+        let payload = orm::OrmBuilder::new().insert(item).build();
+
+        println!("Payload-Query: => {}", payload["queries"][0]["query"]);
+        println!("Payload-params: => {}", payload["queries"][0]["params"]);
+
+        let expected_sql = "WITH inserted_parent AS (INSERT INTO test (name) VALUES ($1) RETURNING id) , child_history_0_0 AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $2)  RETURNING id) , child_history_1_0 AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $3)  RETURNING id) , child_history_2_0 AS (INSERT INTO test_history (test_id, state) VALUES ((SELECT id FROM inserted_parent), $4)  RETURNING id) , child_data_0_0 AS (INSERT INTO test_data (test_id, state) VALUES ((SELECT id FROM inserted_parent), $5)  ON CONFLICT (state) DO NOTHING RETURNING id) SELECT id FROM inserted_parent";
+
+        let expected_params = serde_json::json!([
+            "Test Name",
+            "{\"type\":\"Active\"}",
+            "{\"data\":{\"closed_at\":\"Yesterday\"},\"type\":\"Closed\"}",
+            "{\"data\":{\"int_value\":12},\"type\":\"Value\"}",
+            "{\"type\":\"Active\"}",
+        ]);
+
+        assert_eq!(payload["queries"][0]["query"], expected_sql);
+        assert_eq!(payload["queries"][0]["params"], expected_params);
+    }
+
+    #[cfg(feature = "orm_beta")]
+    #[test]
+    pub fn test_orm_insert_with_empty_child_generation() {
+        let item = TestTable {
+            id: None,
+            name: Some("Test Name".to_string()),
+            description: None,
+            history: Vec::new(),
+            data: None,
+        };
+
+        let payload = orm::OrmBuilder::new().insert(item).build();
+
+        println!("Payload-Query: => {}", payload["queries"][0]["query"]);
+        println!("Payload-params: => {}", payload["queries"][0]["params"]);
+
+        let expected_sql = "INSERT INTO test (name) VALUES ($1)";
+
+        let expected_params = serde_json::json!(["Test Name"]);
+
+        assert_eq!(payload["queries"][0]["query"], expected_sql);
+        assert_eq!(payload["queries"][0]["params"], expected_params);
+    }
+
+    #[cfg(feature = "orm_beta")]
+    #[test]
+    fn test_orm_update_generation() {
+        let item = TestTable {
+            id: Some(42),
+            name: Some("Updated Test Name".to_string()),
+            description: None,
+            history: vec![],
+            data: None,
+        };
+
+        let payload = orm::OrmBuilder::new().update(item).build();
+
+        let expected_sql = "UPDATE test SET name = $1 WHERE id = $2";
+        let expected_params = serde_json::json!(["Updated Test Name", 42]);
+
+        let queries = &payload["queries"];
+        assert_eq!(queries[0]["query"].as_str().unwrap(), expected_sql);
+        assert_eq!(queries[0]["params"], expected_params);
+    }
+
+    #[cfg(feature = "orm_beta")]
+    #[test]
+    fn test_orm_delete_generation() {
+        use crate::orm::NeonTable;
+        let apa = TestTable::select_as_json_sql();
+        println!("{apa}");
     }
 }
